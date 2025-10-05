@@ -39,8 +39,6 @@ jobs:
       - name: Compare tags
         id: compare
         run: |
-          echo "fork_tags: ${{ steps.tags.outputs.fork_tags }}"
-          echo "upstream_tags: ${{ steps.tags.outputs.upstream_tags }}"
           new_tags=$(comm -13 <(echo "${{ steps.tags.outputs.fork_tags }}" | tr ' ' '\n' | sort -u) <(echo "${{ steps.tags.outputs.upstream_tags }}" | tr ' ' '\n' | sort -u))
           echo "new_tags=${new_tags}" >> $GITHUB_OUTPUT
 
