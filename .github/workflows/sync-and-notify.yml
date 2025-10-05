@@ -24,35 +24,63 @@ jobs:
       - name: Add upstream
         run: |
           git remote add upstream ${{ env.UPSTREAM_REPO }}.git
-          git fetch upstream --prune --tags
+          # With --prune, local branches that no longer exist on upstream are deleted
+          git fetch upstream --tags
 
       # Get fork tags and upstream tags
       - name: Get tags
         id: tags
         run: |
           git fetch origin --tags
-          echo "fork_tags=$(git tag --sort=-creatordate)" >> $GITHUB_OUTPUT
-          echo "upstream_tags=$(git ls-remote --tags upstream | awk '{print $2}' | sed 's|refs/tags/||' | sort -V)" >> $GITHUB_OUTPUT
+          echo "fork_tags=$(git tag --sort=-creatordate | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          echo "upstream_tags=$(git ls-remote --tags upstream | awk '{print $2}' | sed 's|refs/tags/||' | sort -V -r | tr '\n' ' ')" >> $GITHUB_OUTPUT
 
       # Compare tags to find new ones
       - name: Compare tags
         id: compare
         run: |
-          new_tags=$(comm -13 <(echo "${{ steps.tags.outputs.fork_tags }}" | sort -u) <(echo "${{ steps.tags.outputs.upstream_tags }}" | sort -u))
+          echo "fork_tags: ${{ steps.tags.outputs.fork_tags }}"
+          echo "upstream_tags: ${{ steps.tags.outputs.upstream_tags }}"
+          new_tags=$(comm -13 <(echo "${{ steps.tags.outputs.fork_tags }}" | tr ' ' '\n' | sort -u) <(echo "${{ steps.tags.outputs.upstream_tags }}" | tr ' ' '\n' | sort -u))
           echo "new_tags=${new_tags}" >> $GITHUB_OUTPUT
 
       # Sync branches from upstream
       - name: Sync branches
         run: |
-          for branch in $(git branch -r | grep upstream/ | grep -v HEAD | sed 's|upstream/||'); do
-            git checkout $branch || git checkout -b $branch upstream/$branch
-            git merge upstream/$branch
+          for branch in $(git branch -r | grep '^  upstream/' | sed 's|upstream/||' | grep -v '->'); do
+            echo ">>> Syncing branch: $branch"
+        
+            if git show-ref --verify --quiet refs/heads/$branch; then
+              # Branch already exists locally → update it from upstream
+              echo "Updating branch $branch"
+              git checkout $branch
+              git merge upstream/$branch
+            else
+              # Branch does not exist locally → create it from upstream
+              echo "Creating new branch: $branch"
+              git checkout -b $branch upstream/$branch
+            fi
+          
+            # Push the updated (or newly created) branch to the fork's remote
             git push origin $branch
           done
 
       # Sync all tags to fork
       - name: Sync tags
-        run: git push origin --tags
+        run: |
+          for tag in $(git ls-remote --tags upstream | awk '{print $2}' | sed 's|refs/tags/||'); do
+            echo ">>> Syncing tag: $tag"
+          
+            if git rev-parse "$tag" >/dev/null 2>&1; then
+              # Tag already exists locally → skip it (do not update)
+              echo "Tag $tag already exists locally, skipping..."
+            else
+              # Tag does not exist locally → create it from upstream
+              echo "Creating new tag: $tag"
+              git tag "$tag" "upstream/$tag"
+              git push origin "$tag"
+            fi
+          done
 
       # Send email about new tags
       - name: Send email about new tags
@@ -63,7 +91,7 @@ jobs:
           server_port: ${{ vars.SMTP_PORT }}
           username: ${{ vars.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "MitsubishiCN105ESPHome | New version detected in upstream repository"
+          subject: "GitHub Action | MitsubishiCN105ESPHome | New version detected in upstream repository"
           to: ${{ vars.TO_EMAILS }}
           from: ${{ vars.FROM_EMAIL }}
           body: |
@@ -82,7 +110,7 @@ jobs:
           server_port: ${{ vars.SMTP_PORT }}
           username: ${{ vars.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "MitsubishiCN105ESPHome | Fork sync failed"
+          subject: "GitHub Action | MitsubishiCN105ESPHome | Fork sync failed"
           to: ${{ vars.TO_EMAILS }}
           from: ${{ vars.FROM_EMAIL }}
           body: |
