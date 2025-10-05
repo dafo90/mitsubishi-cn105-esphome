@@ -45,7 +45,7 @@ jobs:
       # Sync branches from upstream
       - name: Sync branches
         run: |
-          for branch in $(git branch -r | grep '^  upstream/' | sed 's|upstream/||' | grep -v '->'); do
+          for branch in $(git branch -r | grep upstream/ | grep -v HEAD | sed 's|upstream/||'); do
             echo ">>> Syncing branch: $branch"
         
             if git show-ref --verify --quiet refs/heads/$branch; then
