@@ -1,0 +1,91 @@
+name: Sync Fork with Upstream and Notify
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'       # every Sunday at 03:00 UTC
+  workflow_dispatch:          # allows manual trigger
+
+env:
+  # GitHub repo configuration
+  UPSTREAM_REPO: https://github.com/echavet/MitsubishiCN105ESPHome # upstream repository
+  FORK_REPO_URL: https://github.com/dafo90/mitsubishi-cn105-esphome  # link to your fork
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the fork
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Add upstream remote and fetch all branches and tags
+      - name: Add upstream
+        run: |
+          git remote add upstream ${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream --prune --tags
+
+      # Get fork tags and upstream tags
+      - name: Get tags
+        id: tags
+        run: |
+          git fetch origin --tags
+          echo "fork_tags=$(git tag --sort=-creatordate)" >> $GITHUB_OUTPUT
+          echo "upstream_tags=$(git ls-remote --tags upstream | awk '{print $2}' | sed 's|refs/tags/||' | sort -V)" >> $GITHUB_OUTPUT
+
+      # Compare tags to find new ones
+      - name: Compare tags
+        id: compare
+        run: |
+          new_tags=$(comm -13 <(echo "${{ steps.tags.outputs.fork_tags }}" | sort -u) <(echo "${{ steps.tags.outputs.upstream_tags }}" | sort -u))
+          echo "new_tags=${new_tags}" >> $GITHUB_OUTPUT
+
+      # Sync branches from upstream
+      - name: Sync branches
+        run: |
+          for branch in $(git branch -r | grep upstream/ | grep -v HEAD | sed 's|upstream/||'); do
+            git checkout $branch || git checkout -b $branch upstream/$branch
+            git merge upstream/$branch
+            git push origin $branch
+          done
+
+      # Sync all tags to fork
+      - name: Sync tags
+        run: git push origin --tags
+
+      # Send email about new tags
+      - name: Send email about new tags
+        if: ${{ steps.compare.outputs.new_tags != '' }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ vars.SMTP_SERVER }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "MitsubishiCN105ESPHome | New version detected in upstream repository"
+          to: ${{ vars.TO_EMAILS }}
+          from: ${{ vars.FROM_EMAIL }}
+          body: |
+            The following new tags were found in the upstream repository (${{ env.UPSTREAM_REPO }}):
+
+            ${{ steps.compare.outputs.new_tags }}
+
+            Check your fork here: ${{ env.FORK_REPO_URL }}
+
+      # Send email on failure
+      - name: Send email on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ vars.SMTP_SERVER }}
+          server_port: ${{ vars.SMTP_PORT }}
+          username: ${{ vars.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "MitsubishiCN105ESPHome | Fork sync failed"
+          to: ${{ vars.TO_EMAILS }}
+          from: ${{ vars.FROM_EMAIL }}
+          body: |
+            The weekly fork sync has failed for your fork: ${{ env.FORK_REPO_URL }}
+            Upstream repository: ${{ env.UPSTREAM_REPO }}
+            Please check the Actions log for more details.
